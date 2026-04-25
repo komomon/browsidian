@@ -6,6 +6,17 @@
 
 Browsidian is a local web app to browse and edit an Obsidian vault directly in your browser.
 
+This repository is a revamped version focused on making Browsidian practical for real self-hosted Obsidian use, especially when served behind a reverse proxy and used with larger note sets.
+
+## What's new in this revamp
+
+- Proper sub-path reverse proxy support for Caddy / Nginx deployments such as `/obobob/`
+- Relative Markdown image loading based on the current note path
+- Multi-note tabs for opening, switching, and closing several Markdown files at once
+- A right-side outline panel with Markdown heading navigation and collapse / expand support
+- Full-tree client-side search instead of only searching already-expanded folders
+- More stable app layout with fixed sidebar / toolbar / outline regions and independent content scrolling
+
 ![Screenshot](img/screenshot.png)
 
 It supports four working modes:
@@ -18,17 +29,20 @@ It supports four working modes:
 ## Features
 
 - Browse vault folders and files (tree view)
-- Search files by path/name (client-side filter)
+- Search files by path/name across the vault tree (client-side filter)
 - Create folders and files
 - In creation dialogs, press Enter to confirm
 - New files must be Markdown (`.md`)
 - Edit Markdown with **auto-save** (~1s inactivity) and **Ctrl+S**
+- Open multiple notes in tabs and switch between them without losing context
+- View the current note outline on the right and jump to headings
 - **Preview mode** (basic Markdown → HTML) when not focused; click to edit Markdown
 - Non-`.md` files show "File not supported" in preview
 - Obsidian **wikilinks** in preview: `[[Note]]`, `[[Note|Alias]]` (click to navigate)
+- Relative Markdown images such as `![](attachment/image.png)` resolve from the current note folder
 - Basic Markdown tables in preview
 - Drag & drop a file onto a folder to move it
-- Click a folder to select it (used as default destination for new files/folders)
+- Click a folder to select it as the default destination for new files/folders
 - Dark / Light mode toggle (persisted in `localStorage`)
 - Subtle, consistent UI styling (dark + light)
 - Flat, subtle SVG icon set (no external dependencies)
@@ -69,6 +83,11 @@ OBSIDIAN_VAULT=/path/to/your/vault npm start
 ```
 
 Open: `http://127.0.0.1:5173`
+
+Reverse proxy note:
+
+- Browsidian can be served from a sub-path such as `/obobob/` behind Caddy or Nginx.
+- Example: `handle_path /obobob/* { reverse_proxy http://127.0.0.1:5173 }`
 
 ### Browser mode (no server vault)
 
@@ -156,7 +175,7 @@ git rebase origin/main
   - Change/Disconnect actions are shown next to the current vault name.
 - **Folder selection**
   - Click a folder row (name) to select it.
-  - Selecting a folder clears the currently selected file.
+  - Selecting a folder changes the default destination for new files/folders without closing the current note.
   - Creating a new file/folder pre-fills its path using the selected folder.
   - Click the folder icon to expand/collapse.
   - When a folder path is pre-filled (ending with `/`), the cursor is placed at the end (no auto-selection).
@@ -171,7 +190,7 @@ git rebase origin/main
 
 The preview is intentionally simple (no external dependencies). It supports:
 
-- Headings (`#` to `####`)
+- Headings (`#` to `######`)
 - Paragraphs
 - Line breaks inside paragraphs (single newline → line break)
 - Bold/italic

@@ -150,11 +150,34 @@ function guessContentType(filePath) {
   if (ext === ".html") return "text/html; charset=utf-8";
   if (ext === ".js") return "application/javascript; charset=utf-8";
   if (ext === ".css") return "text/css; charset=utf-8";
+  if (ext === ".md") return "text/markdown; charset=utf-8";
+  if (ext === ".txt") return "text/plain; charset=utf-8";
   if (ext === ".svg") return "image/svg+xml";
   if (ext === ".png") return "image/png";
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".avif") return "image/avif";
+  if (ext === ".bmp") return "image/bmp";
   if (ext === ".ico") return "image/x-icon";
+  if (ext === ".mp4") return "video/mp4";
+  if (ext === ".webm") return "video/webm";
+  if (ext === ".mp3") return "audio/mpeg";
+  if (ext === ".wav") return "audio/wav";
+  if (ext === ".pdf") return "application/pdf";
   return "application/octet-stream";
+}
+
+async function serveFile(res, abs, contentType) {
+  const st = await fsp.stat(abs);
+  if (!st.isFile()) return false;
+  res.writeHead(200, {
+    "Content-Type": contentType || guessContentType(abs),
+    "Content-Length": st.size,
+    "Cache-Control": "no-store"
+  });
+  fs.createReadStream(abs).pipe(res);
+  return true;
 }
 
 async function serveStatic(reqUrl, res) {
@@ -186,14 +209,7 @@ async function serveStatic(reqUrl, res) {
       res.end(body);
       return true;
     }
-
-    res.writeHead(200, {
-      "Content-Type": guessContentType(abs),
-      "Content-Length": st.size,
-      "Cache-Control": "no-store"
-    });
-    fs.createReadStream(abs).pipe(res);
-    return true;
+    return await serveFile(res, abs);
   } catch {
     return false;
   }
@@ -323,6 +339,24 @@ async function main() {
           return raw;
         };
 
+        const downloadBinary = async (dropboxPath) => {
+          const r = await fetch("https://content.dropboxapi.com/2/files/download", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": JSON.stringify({ path: dropboxPath }) }
+          });
+          const body = Buffer.from(await r.arrayBuffer());
+          const resultHeader = r.headers.get("dropbox-api-result");
+          let metadata = {};
+          try {
+            metadata = resultHeader ? JSON.parse(resultHeader) : {};
+          } catch {}
+          if (!r.ok) {
+            const message = body.toString("utf8") || `Dropbox HTTP ${r.status}`;
+            throw new Error(message);
+          }
+          return { body, metadata };
+        };
+
         const uploadText = async (dropboxPath, content) => {
           const r = await fetch("https://content.dropboxapi.com/2/files/upload", {
             method: "POST",
@@ -373,6 +407,20 @@ async function main() {
           if (typeof p !== "string") return json(res, 400, { error: "Expected { path }" });
           const content = await downloadText(p);
           return json(res, 200, { content });
+        }
+
+        if (req.method === "GET" && reqUrl.pathname === "/api/dropbox/files/download") {
+          const p = reqUrl.searchParams.get("path");
+          if (typeof p !== "string" || !p) return json(res, 400, { error: "Missing path" });
+          const { body, metadata } = await downloadBinary(p);
+          const contentType = metadata?.name ? guessContentType(metadata.name) : "application/octet-stream";
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": body.length,
+            "Cache-Control": "no-store"
+          });
+          res.end(body);
+          return;
         }
 
         if (req.method === "POST" && reqUrl.pathname === "/api/dropbox/files/write") {
@@ -464,6 +512,15 @@ async function main() {
           if (!filePath) return json(res, 400, { error: "Missing path" });
           const content = await readFileUtf8(vaultReal, filePath);
           return json(res, 200, { path: filePath, content });
+        }
+
+        if (req.method === "GET" && reqUrl.pathname === "/api/asset") {
+          const filePath = reqUrl.searchParams.get("path");
+          if (!filePath) return json(res, 400, { error: "Missing path" });
+          const abs = ensureInsideVault(vaultReal, filePath);
+          const served = await serveFile(res, abs);
+          if (!served) return json(res, 404, { error: "Not found" });
+          return;
         }
 
         if (req.method === "PUT" && reqUrl.pathname === "/api/write") {

@@ -5,9 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="app-version" content="__APP_VERSION__" />
     <title>Browsidian</title>
-    <link rel="icon" type="image/png" href="/img/browsidian.png" />
-    <link rel="apple-touch-icon" href="/img/browsidian.png" />
-    <link rel="stylesheet" href="/styles.css" />
+    <script>
+      (function () {
+        var pathname = window.location.pathname || "/";
+        var basePath = pathname;
+        if (basePath.endsWith("/index.html")) basePath = basePath.slice(0, -10);
+        else if (!basePath.endsWith("/")) basePath += "/";
+        document.write('<base href="' + basePath.replace(/"/g, "&quot;") + '">');
+      })();
+    </script>
+    <link rel="icon" type="image/png" href="img/browsidian.png" />
+    <link rel="apple-touch-icon" href="img/browsidian.png" />
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <!-- Icon library (inline SVG symbols, no external dependencies) -->
@@ -100,7 +109,7 @@
         <div class="sidebar-top">
           <div class="brand">
             <div class="brand-title">
-              <img class="brand-logo" src="/img/browsidian.png" alt="" aria-hidden="true" />
+              <img class="brand-logo" src="img/browsidian.png" alt="" aria-hidden="true" />
               <span>Browsidian</span>
             </div>
             <div class="brand-subtitle vault-header">
@@ -133,6 +142,7 @@
       </aside>
 
       <main class="main">
+        <div id="tabs" class="tabs" aria-label="Open files" hidden></div>
         <header class="topbar">
           <div class="path">
             <span class="path-label">File:</span>
@@ -144,18 +154,30 @@
               <svg class="icon-svg" aria-hidden="true"><use href="#i-save"></use></svg>
               <span>Save (Ctrl+S)</span>
             </button>
+            <button id="outlineToggleBtn" class="btn btn-secondary" type="button" aria-expanded="true">
+              <svg class="icon-svg" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+              <span>Outline</span>
+            </button>
           </div>
         </header>
 
         <section class="editor">
-          <div id="preview" class="preview" tabindex="0" role="button" aria-label="Preview (click to edit)"></div>
-          <textarea
-            id="editor"
-            class="textarea"
-            spellcheck="false"
-            placeholder="Select a file on the left…"
-            hidden
-          ></textarea>
+          <div class="editor-main">
+            <div id="preview" class="preview" tabindex="0" role="button" aria-label="Preview (click to edit)"></div>
+            <textarea
+              id="editor"
+              class="textarea"
+              spellcheck="false"
+              placeholder="Select a file on the left…"
+              hidden
+            ></textarea>
+          </div>
+          <aside id="outline" class="outline" aria-label="Document outline">
+            <div class="outline-header">
+              <div class="outline-title">Outline</div>
+            </div>
+            <div id="outlineTree" class="outline-tree"></div>
+          </aside>
         </section>
 
         <footer class="statusbar">
@@ -252,6 +274,6 @@
       <button id="contextDeleteFile" class="context-item" type="button">Delete file</button>
     </div>
 
-    <script src="/app.js" type="module"></script>
+    <script src="app.js" type="module"></script>
   </body>
 </html>

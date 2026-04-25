@@ -2,6 +2,10 @@ const treeEl = document.getElementById("tree");
 const searchEl = document.getElementById("search");
 const editorEl = document.getElementById("editor");
 const previewEl = document.getElementById("preview");
+const outlineEl = document.getElementById("outline");
+const outlineTreeEl = document.getElementById("outlineTree");
+const outlineToggleBtn = document.getElementById("outlineToggleBtn");
+const tabsEl = document.getElementById("tabs");
 const saveBtn = document.getElementById("saveBtn");
 const statusEl = document.getElementById("status");
 const currentPathEl = document.getElementById("currentPath");
@@ -46,6 +50,12 @@ const state = {
   dropbox: null, // { accessToken, refreshToken, expiresAt, accountId, rootPath }
   expandedDirs: new Set([""]),
   childrenByDir: new Map(), // dir -> entries[]
+  tabs: [],
+  activeTabId: null,
+  nextTabId: 1,
+  outlineItems: [],
+  outlineCollapsed: false,
+  outlineExpandedIds: new Set(),
   activeFile: null,
   activeFileContent: "",
   dirty: false,
@@ -55,14 +65,317 @@ const state = {
   autosaveQueued: false,
   draggingPath: null,
   fileIndex: null,
-  fileIndexPromise: null
+  fileIndexPromise: null,
+  searchTreePromise: null,
+  previewAssetUrls: new Set(),
+  previewRenderToken: 0
 };
 
 const IGNORED_DIRS = new Set([".obsidian", ".git", "node_modules", ".trash", ".DS_Store"]);
 const AUTOSAVE_DELAY_MS = 1200;
+const APP_BASE_URL = new URL(document.baseURI, window.location.href);
+
+function appUrl(input) {
+  const raw = (input ?? "").toString().trim();
+  if (!raw) return APP_BASE_URL.toString();
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(raw)) return raw;
+  if (raw.startsWith("//")) return `${window.location.protocol}${raw}`;
+  const normalized = raw.startsWith("?") || raw.startsWith("#") ? raw : raw.replace(/^\/+/g, "");
+  return new URL(normalized, APP_BASE_URL).toString();
+}
 
 function setStatus(msg) {
   statusEl.textContent = msg;
+}
+
+function getTabById(tabId) {
+  return state.tabs.find((tab) => tab.id === tabId) || null;
+}
+
+function getCurrentTab() {
+  return getTabById(state.activeTabId);
+}
+
+function renderTabs() {
+  if (!tabsEl) return;
+  tabsEl.innerHTML = "";
+  tabsEl.hidden = state.tabs.length === 0;
+  for (const tab of state.tabs) {
+    const tabEl = document.createElement("div");
+    tabEl.className = "tab";
+    tabEl.dataset.tabId = String(tab.id);
+    tabEl.setAttribute("role", "button");
+    tabEl.tabIndex = 0;
+    if (tab.id === state.activeTabId) tabEl.classList.add("active");
+    tabEl.title = tab.filePath;
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "tab-title";
+    titleEl.textContent = basenameOf(tab.filePath);
+    tabEl.appendChild(titleEl);
+
+    const dirtyEl = document.createElement("span");
+    dirtyEl.className = "tab-dirty";
+    dirtyEl.textContent = tab.isDirty ? "*" : "";
+    tabEl.appendChild(dirtyEl);
+
+    const closeEl = document.createElement("button");
+    closeEl.type = "button";
+    closeEl.className = "tab-close";
+    closeEl.dataset.closeTab = String(tab.id);
+    closeEl.setAttribute("aria-label", `Close ${basenameOf(tab.filePath)}`);
+    closeEl.textContent = "x";
+    tabEl.appendChild(closeEl);
+
+    tabsEl.appendChild(tabEl);
+  }
+}
+
+function syncCurrentTabState() {
+  const tab = getCurrentTab();
+  if (!tab) return;
+  tab.filePath = state.activeFile;
+  tab.content = editorEl.value;
+  tab.savedContent = state.activeFileContent;
+  tab.isDirty = state.dirty;
+  tab.view = editorEl.hidden ? "preview" : "editor";
+}
+
+function createTab(filePath, content) {
+  const tab = {
+    id: state.nextTabId++,
+    filePath,
+    content,
+    savedContent: content,
+    isDirty: false,
+    view: "preview"
+  };
+  state.tabs.push(tab);
+  return tab;
+}
+
+function closeTabById(tabId, { force = false } = {}) {
+  const idx = state.tabs.findIndex((tab) => tab.id === tabId);
+  if (idx === -1) return false;
+  const tab = state.tabs[idx];
+  if (!force && tab.isDirty) {
+    const ok = confirm(`Close without saving?\n\n${tab.filePath}`);
+    if (!ok) return false;
+  }
+
+  state.tabs.splice(idx, 1);
+  if (state.activeTabId !== tabId) {
+    renderTabs();
+    return true;
+  }
+
+  const nextTab = state.tabs[Math.max(0, idx - 1)] || state.tabs[idx] || null;
+  if (nextTab) {
+    state.activeTabId = null;
+    activateTab(nextTab.id, { skipSync: true, focusEditor: false });
+    return true;
+  }
+
+  state.activeTabId = null;
+  clearActiveFile();
+  renderTabs();
+  renderTree();
+  setStatus("Ready.");
+  return true;
+}
+
+function closeTabsForPath(filePath, { force = false } = {}) {
+  const matches = state.tabs.filter((tab) => tab.filePath === filePath).map((tab) => tab.id);
+  for (const tabId of matches) {
+    const closed = closeTabById(tabId, { force });
+    if (!closed) return false;
+  }
+  return true;
+}
+
+function activateTab(tabId, { skipSync = false, focusEditor = false } = {}) {
+  if (!skipSync) syncCurrentTabState();
+  const tab = getTabById(tabId);
+  if (!tab) {
+    clearActiveFile();
+    renderTabs();
+    renderTree();
+    return;
+  }
+
+  state.activeTabId = tab.id;
+  state.activeFile = tab.filePath;
+  state.activeFileContent = tab.savedContent;
+  editorEl.value = tab.content;
+  state.selectedDir = parentDirOf(tab.filePath);
+  setActivePath(tab.filePath);
+  setDirty(tab.isDirty);
+  renderTabs();
+  renderTree();
+  if (tab.view === "editor") showEditor({ focus: focusEditor });
+  else showPreview();
+}
+
+function slugifyHeading(text) {
+  const normalized = (text || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[`~!@#$%^&*()+=[\]{}|\\:;"'<>,.?/]/g, "")
+    .replaceAll(/\s+/g, "-");
+  return normalized || "section";
+}
+
+function extractHeadings(md) {
+  const lines = (md ?? "").toString().replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+  const headings = [];
+  const usedIds = new Map();
+  let inCode = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const fenceMatch = lines[i].match(/^```/);
+    if (fenceMatch) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    const match = lines[i].match(/^(#{1,6})\s+(.*)$/);
+    if (!match) continue;
+    const level = match[1].length;
+    const text = match[2].trim();
+    if (!text) continue;
+    const baseId = slugifyHeading(text);
+    const count = (usedIds.get(baseId) || 0) + 1;
+    usedIds.set(baseId, count);
+    const id = count === 1 ? baseId : `${baseId}-${count}`;
+    headings.push({ id, level, text, line: i });
+  }
+  return headings;
+}
+
+function buildOutlineTree(items) {
+  const roots = [];
+  const stack = [];
+  for (const item of items) {
+    const node = { ...item, children: [] };
+    while (stack.length && stack[stack.length - 1].level >= node.level) stack.pop();
+    if (stack.length) stack[stack.length - 1].children.push(node);
+    else roots.push(node);
+    stack.push(node);
+  }
+  return roots;
+}
+
+function syncOutline(content) {
+  const items = extractHeadings(content);
+  const previous = state.outlineExpandedIds;
+  const nextExpanded = new Set();
+  for (const item of items) {
+    if (previous.has(item.id)) nextExpanded.add(item.id);
+  }
+  const levels = [];
+  for (const item of items) {
+    while (levels.length && levels[levels.length - 1].level >= item.level) levels.pop();
+    if (levels.length) nextExpanded.add(levels[levels.length - 1].id);
+    levels.push(item);
+  }
+  state.outlineItems = buildOutlineTree(items);
+  state.outlineExpandedIds = nextExpanded;
+  renderOutline();
+}
+
+function toggleOutlineVisibility() {
+  state.outlineCollapsed = !state.outlineCollapsed;
+  renderOutline();
+}
+
+function toggleOutlineNode(nodeId) {
+  if (state.outlineExpandedIds.has(nodeId)) state.outlineExpandedIds.delete(nodeId);
+  else state.outlineExpandedIds.add(nodeId);
+  renderOutline();
+}
+
+function focusHeadingInEditor(line) {
+  const lines = editorEl.value.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+  let offset = 0;
+  for (let i = 0; i < line; i += 1) offset += lines[i].length + 1;
+  editorEl.focus();
+  editorEl.setSelectionRange(offset, offset);
+  const lineHeight = parseFloat(window.getComputedStyle(editorEl).lineHeight) || 20;
+  editorEl.scrollTop = Math.max(0, line * lineHeight - editorEl.clientHeight * 0.3);
+}
+
+function jumpToHeading(nodeId) {
+  const stack = [...state.outlineItems];
+  while (stack.length) {
+    const item = stack.shift();
+    if (item.id === nodeId) {
+      if (!previewEl.hidden) {
+        const headingEl = previewEl.querySelector(`[data-heading-id="${CSS.escape(nodeId)}"]`);
+        headingEl?.scrollIntoView({ block: "start", behavior: "smooth" });
+      } else {
+        focusHeadingInEditor(item.line);
+      }
+      return;
+    }
+    if (item.children?.length) stack.unshift(...item.children);
+  }
+}
+
+function renderOutline() {
+  if (!outlineEl || !outlineTreeEl || !outlineToggleBtn) return;
+  outlineEl.hidden = state.outlineCollapsed;
+  outlineToggleBtn.setAttribute("aria-expanded", state.outlineCollapsed ? "false" : "true");
+  const iconUse = outlineToggleBtn.querySelector("use");
+  if (iconUse) iconUse.setAttribute("href", state.outlineCollapsed ? "#i-chevron-right" : "#i-chevron-down");
+
+  outlineTreeEl.innerHTML = "";
+  if (state.outlineCollapsed) return;
+
+  if (!state.activeFile) {
+    outlineTreeEl.innerHTML = `<div class="outline-empty">Open a note to see its outline.</div>`;
+    return;
+  }
+
+  if (!state.outlineItems.length) {
+    outlineTreeEl.innerHTML = `<div class="outline-empty">No headings found.</div>`;
+    return;
+  }
+
+  const renderNodes = (nodes, depth, container) => {
+    for (const node of nodes) {
+      const row = document.createElement("div");
+      row.className = "outline-item";
+      row.style.setProperty("--outline-depth", String(Math.max(0, node.level - 1)));
+
+      if (node.children.length) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "outline-item-toggle";
+        toggle.dataset.outlineToggle = node.id;
+        toggle.setAttribute("aria-label", state.outlineExpandedIds.has(node.id) ? "Collapse section" : "Expand section");
+        toggle.innerHTML = `<svg class="icon-svg" aria-hidden="true"><use href="#${state.outlineExpandedIds.has(node.id) ? "i-chevron-down" : "i-chevron-right"}"></use></svg>`;
+        row.appendChild(toggle);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.className = "outline-item-spacer";
+        row.appendChild(spacer);
+      }
+
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "outline-link";
+      link.dataset.outlineJump = node.id;
+      link.textContent = node.text;
+      row.appendChild(link);
+      container.appendChild(row);
+
+      if (node.children.length && state.outlineExpandedIds.has(node.id)) {
+        renderNodes(node.children, depth + 1, container);
+      }
+    }
+  };
+
+  renderNodes(state.outlineItems, 0, outlineTreeEl);
 }
 
 const dropboxAuthStore = (() => {
@@ -168,7 +481,7 @@ async function dropboxEnsureAccessToken() {
 
 async function dropboxApiJson(path, payload) {
   const token = await dropboxEnsureAccessToken();
-  const res = await fetch(`/api/dropbox/files/${path}`, {
+  const res = await fetch(appUrl(`/api/dropbox/files/${path}`), {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-dropbox-access-token": token },
     body: JSON.stringify(payload)
@@ -184,7 +497,7 @@ async function dropboxApiJson(path, payload) {
 
 async function dropboxDownloadText(dropboxPath) {
   const token = await dropboxEnsureAccessToken();
-  const res = await fetch("/api/dropbox/files/read", {
+  const res = await fetch(appUrl("/api/dropbox/files/read"), {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-dropbox-access-token": token },
     body: JSON.stringify({ path: dropboxPath })
@@ -200,7 +513,7 @@ async function dropboxDownloadText(dropboxPath) {
 
 async function dropboxUploadText(dropboxPath, content) {
   const token = await dropboxEnsureAccessToken();
-  const res = await fetch("/api/dropbox/files/write", {
+  const res = await fetch(appUrl("/api/dropbox/files/write"), {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-dropbox-access-token": token },
     body: JSON.stringify({ path: dropboxPath, content: (content ?? "").toString() })
@@ -416,7 +729,7 @@ Have fun exploring Browsidian.`;
 
 async function tryGetPackageJsonVersion() {
   try {
-    const res = await fetch("/package.json", { headers: { "Accept": "application/json" }, cache: "no-store" });
+    const res = await fetch(appUrl("/package.json"), { headers: { "Accept": "application/json" }, cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return null;
     const v = (data?.version || "").toString().trim();
@@ -600,6 +913,31 @@ function invalidateFileIndex() {
   state.fileIndexPromise = null;
 }
 
+async function ensureSearchTreeLoaded() {
+  if (state.searchTreePromise) return await state.searchTreePromise;
+
+  state.searchTreePromise = (async () => {
+    const walk = async (dir) => {
+      let entries = state.childrenByDir.get(dir);
+      if (!entries) {
+        entries = await listDir(dir);
+        state.childrenByDir.set(dir, entries);
+      }
+      for (const entry of entries) {
+        if (entry.type === "dir") await walk(entry.path);
+      }
+    };
+
+    try {
+      await walk("");
+    } finally {
+      state.searchTreePromise = null;
+    }
+  })();
+
+  return await state.searchTreePromise;
+}
+
 async function openWikiLinkTarget(target) {
   if (!state.activeFile) return;
   let t = (target || "").toString().trim();
@@ -633,7 +971,114 @@ async function openWikiLinkTarget(target) {
   await openFile(normalizeDir(t));
 }
 
-function renderMarkdownBasic(md) {
+function isExternalResourceHref(href) {
+  const s = (href || "").trim();
+  return Boolean(s) && (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(s) || s.startsWith("//"));
+}
+
+function decodeUriPath(input) {
+  const value = (input ?? "").toString();
+  if (!value.includes("%")) return value;
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeVaultPath(input) {
+  const parts = [];
+  for (const part of (input ?? "").toString().replaceAll("\\", "/").split("/")) {
+    const token = part.trim();
+    if (!token || token === ".") continue;
+    if (token === "..") {
+      if (parts.length) parts.pop();
+      continue;
+    }
+    parts.push(token);
+  }
+  return parts.join("/");
+}
+
+function resolveVaultAssetPath(notePath, rawHref) {
+  const safe = safeHref(rawHref);
+  if (!safe) return null;
+  const withoutHash = safe.split("#")[0].trim();
+  if (!withoutHash || isExternalResourceHref(withoutHash)) return null;
+
+  const queryIndex = withoutHash.indexOf("?");
+  const pathOnly = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const decoded = decodeUriPath(pathOnly.trim());
+  if (!decoded) return null;
+
+  if (decoded.startsWith("/")) return normalizeVaultPath(decoded.slice(1));
+  return normalizeVaultPath(joinPath(parentDirOf(notePath || ""), decoded));
+}
+
+async function fetchDropboxBlob(dropboxPath) {
+  const token = await dropboxEnsureAccessToken();
+  const res = await fetch(appUrl(`/api/dropbox/files/download?path=${encodeURIComponent(dropboxPath)}`), {
+    headers: { "x-dropbox-access-token": token }
+  });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {}
+    throw new Error(data?.error || data?.error_summary || raw || `Dropbox HTTP ${res.status}`);
+  }
+  return await res.blob();
+}
+
+async function resolvePreviewAssetUrl(vaultPath) {
+  if (!vaultPath) return null;
+  if (state.mode === "server") {
+    return appUrl(`/api/asset?path=${encodeURIComponent(vaultPath)}`);
+  }
+  if (state.mode === "browser") {
+    const handle = await getFileHandleByPath(vaultPath, { create: false });
+    const file = await handle.getFile();
+    const objectUrl = URL.createObjectURL(file);
+    state.previewAssetUrls.add(objectUrl);
+    return objectUrl;
+  }
+  if (state.mode === "dropbox") {
+    const blob = await fetchDropboxBlob(dropboxPathFor(vaultPath));
+    const objectUrl = URL.createObjectURL(blob);
+    state.previewAssetUrls.add(objectUrl);
+    return objectUrl;
+  }
+  return null;
+}
+
+function revokePreviewAssetUrls() {
+  for (const url of state.previewAssetUrls) URL.revokeObjectURL(url);
+  state.previewAssetUrls.clear();
+}
+
+async function hydratePreviewAssets(renderToken) {
+  const images = Array.from(previewEl.querySelectorAll("img[data-vault-path]"));
+  for (const img of images) {
+    const vaultPath = img.dataset.vaultPath || "";
+    try {
+      const resolved = await resolvePreviewAssetUrl(vaultPath);
+      if (renderToken !== state.previewRenderToken) return;
+      if (resolved) {
+        img.src = resolved;
+        img.removeAttribute("data-vault-path");
+        continue;
+      }
+      img.alt = img.alt || basenameOf(vaultPath);
+    } catch {
+      if (renderToken !== state.previewRenderToken) return;
+      img.alt = img.alt || basenameOf(vaultPath);
+      img.title = `Resource not found: ${vaultPath}`;
+    }
+  }
+}
+
+function renderMarkdownBasic(md, notePath = "", headings = []) {
   const lines = (md ?? "").toString().replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   let i = 0;
   let html = "";
@@ -641,6 +1086,7 @@ function renderMarkdownBasic(md) {
   let codeFence = "";
   let listType = null; // "ul" | "ol"
   let inBlockquote = false;
+  let headingIndex = 0;
 
   const closeList = () => {
     if (listType) html += `</${listType}>`;
@@ -689,8 +1135,13 @@ function renderMarkdownBasic(md) {
     s = s.replaceAll(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, href) => {
       const safe = safeHref(href);
       if (!safe) return "";
-      const srcEsc = escapeHtml(safe);
       const altEsc = escapeHtml((alt || "").toString());
+      const vaultPath = resolveVaultAssetPath(notePath, safe);
+      if (vaultPath) {
+        const pathEsc = escapeHtml(vaultPath);
+        return `<img data-vault-path="${pathEsc}" alt="${altEsc}" loading="lazy" />`;
+      }
+      const srcEsc = escapeHtml(safe);
       return `<img src="${srcEsc}" alt="${altEsc}" loading="lazy" />`;
     });
     s = s.replaceAll(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, href) => {
@@ -786,12 +1237,15 @@ function renderMarkdownBasic(md) {
       closeBlockquote();
     }
 
-    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       flushParagraph(paragraph);
       closeList();
       const level = heading[1].length;
-      html += `<h${level}>${inline(heading[2].trim())}</h${level}>`;
+      const meta = headings[headingIndex] || null;
+      headingIndex += 1;
+      const headingId = meta?.id || `heading-${headingIndex}`;
+      html += `<h${level} id="${escapeHtml(headingId)}" data-heading-id="${escapeHtml(headingId)}">${inline(heading[2].trim())}</h${level}>`;
       continue;
     }
 
@@ -859,15 +1313,24 @@ function renderMarkdownBasic(md) {
 }
 
 function showPreview() {
+  revokePreviewAssetUrls();
+  state.previewRenderToken += 1;
+  const renderToken = state.previewRenderToken;
   editorEl.hidden = true;
   previewEl.hidden = false;
   const content = state.activeFile ? editorEl.value : "";
   const isMd = state.activeFile ? state.activeFile.toLowerCase().endsWith(".md") : false;
+  syncOutline(content);
   previewEl.innerHTML = state.activeFile
     ? isMd
-      ? renderMarkdownBasic(content)
+      ? renderMarkdownBasic(content, state.activeFile, extractHeadings(content))
       : `<div class="muted">File not supported</div>`
     : `<div class="muted">Select a file on the left…</div>`;
+  const tab = getCurrentTab();
+  if (tab) tab.view = "preview";
+  if (state.activeFile && isMd) {
+    void hydratePreviewAssets(renderToken);
+  }
 }
 
 function showEditor({ focus } = { focus: true }) {
@@ -875,6 +1338,9 @@ function showEditor({ focus } = { focus: true }) {
   if (!state.activeFile.toLowerCase().endsWith(".md")) return;
   previewEl.hidden = true;
   editorEl.hidden = false;
+  syncOutline(editorEl.value);
+  const tab = getCurrentTab();
+  if (tab) tab.view = "editor";
   if (focus) editorEl.focus();
 }
 
@@ -920,7 +1386,7 @@ async function openDropboxVault() {
     if (!ok) return;
   }
 
-  const redirectUri = cfg.redirectUri || `${window.location.origin}/dropbox-oauth.html`;
+  const redirectUri = cfg.redirectUri || appUrl("dropbox-oauth.html");
   if (cfg.redirectUri && !redirectUri.startsWith(window.location.origin)) {
     alert(`Invalid DROPBOX_REDIRECT_URI (must match this origin):\n\n${window.location.origin}`);
     return;
@@ -1044,6 +1510,13 @@ function setDirty(isDirty) {
   state.dirty = isDirty;
   dirtyEl.hidden = !isDirty;
   saveBtn.disabled = !state.activeFile || !isDirty;
+  const tab = getCurrentTab();
+  if (tab) {
+    tab.isDirty = isDirty;
+    tab.content = editorEl.value;
+    tab.savedContent = state.activeFileContent;
+  }
+  renderTabs();
 }
 
 function setActivePath(path) {
@@ -1051,14 +1524,14 @@ function setActivePath(path) {
 }
 
 async function apiGet(url) {
-  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  const res = await fetch(appUrl(url), { headers: { "Accept": "application/json" } });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
 async function apiSend(method, url, payload) {
-  const res = await fetch(url, {
+  const res = await fetch(appUrl(url), {
     method,
     headers: { "Content-Type": "application/json", "Accept": "application/json" },
     body: JSON.stringify(payload)
@@ -1279,8 +1752,8 @@ async function moveFilePath(fromRel, toRel) {
   await apiSend("POST", "/api/move", { from: fromRel, to: toRel });
 }
 
-function iconFor(entry) {
-  if (entry.type === "dir") return state.expandedDirs.has(entry.path) ? "i-chevron-down" : "i-chevron-right";
+function iconFor(entry, isOpen = state.expandedDirs.has(entry.path)) {
+  if (entry.type === "dir") return isOpen ? "i-chevron-down" : "i-chevron-right";
   return "i-file-text";
 }
 
@@ -1304,9 +1777,8 @@ function passesFilter(entry) {
 
 function renderTree() {
   treeEl.innerHTML = "";
-  const rootChildren = state.childrenByDir.get("") || [];
   const frag = document.createDocumentFragment();
-
+  const filter = state.filter.trim().toLowerCase();
   const selectedDir = normalizeDir(state.selectedDir || "");
 
   const renderDirChildren = (dir, container) => {
@@ -1335,11 +1807,12 @@ function renderTree() {
 
       const icon = document.createElement("div");
       icon.className = "icon";
+      const isDirOpen = entry.type === "dir" && (state.expandedDirs.has(entry.path) || (Boolean(filter) && hasAnyChildMatching(entry.path)));
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "icon-svg");
       svg.setAttribute("aria-hidden", "true");
       const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-      use.setAttribute("href", `#${iconFor(entry)}`);
+      use.setAttribute("href", `#${iconFor(entry, isDirOpen)}`);
       svg.appendChild(use);
       icon.appendChild(svg);
 
@@ -1354,9 +1827,9 @@ function renderTree() {
       if (entry.type === "dir") {
         const childrenWrap = document.createElement("div");
         childrenWrap.className = "tree-children";
-        childrenWrap.hidden = !state.expandedDirs.has(entry.path);
+        childrenWrap.hidden = !isDirOpen;
         container.appendChild(childrenWrap);
-        if (state.expandedDirs.has(entry.path)) renderDirChildren(entry.path, childrenWrap);
+        if (isDirOpen) renderDirChildren(entry.path, childrenWrap);
       }
     }
   };
@@ -1393,22 +1866,19 @@ async function toggleDir(dir) {
 
 async function openFile(filePath) {
   if (!filePath) return;
-  if (state.dirty) {
-    const ok = confirm("You have unsaved changes. Continue without saving?");
-    if (!ok) return;
+  syncCurrentTabState();
+  const existing = state.tabs.find((tab) => tab.filePath === filePath);
+  if (existing) {
+    activateTab(existing.id, { skipSync: true, focusEditor: false });
+    setStatus("Ready.");
+    return;
   }
   clearAutosaveTimer();
   setStatus(`Opening: ${filePath}`);
   const content = await readFile(filePath);
-  state.activeFile = filePath;
-  state.selectedDir = parentDirOf(filePath);
-  state.activeFileContent = content;
-  editorEl.value = content;
-  setActivePath(filePath);
-  setDirty(false);
-  showPreview();
+  const tab = createTab(filePath, content);
+  activateTab(tab.id, { skipSync: true, focusEditor: false });
   setStatus("Ready.");
-  renderTree();
 }
 
 async function saveCurrent() {
@@ -1417,6 +1887,7 @@ async function saveCurrent() {
   await writeFile(state.activeFile, editorEl.value);
   state.activeFileContent = editorEl.value;
   setDirty(false);
+  syncCurrentTabState();
   setStatus("Saved.");
   showPreview();
 }
@@ -1815,6 +2286,9 @@ function setSelectedDir(dirRel) {
 
 function clearActiveFile() {
   clearAutosaveTimer();
+  revokePreviewAssetUrls();
+  state.outlineItems = [];
+  state.outlineExpandedIds = new Set();
   state.activeFile = null;
   state.activeFileContent = "";
   editorEl.value = "";
@@ -1824,11 +2298,6 @@ function clearActiveFile() {
 }
 
 async function selectFolder(dirRel) {
-  if (state.dirty) {
-    const ok = confirm("You have unsaved changes. Continue without saving?");
-    if (!ok) return;
-  }
-  if (state.activeFile) clearActiveFile();
   setSelectedDir(dirRel);
   setStatus("Ready.");
 }
@@ -1906,6 +2375,41 @@ treeEl.addEventListener("click", async (e) => {
   } catch (err) {
     setStatus(`Error: ${err.message}`);
   }
+});
+
+tabsEl?.addEventListener("click", (e) => {
+  const closeBtn = e.target.closest("[data-close-tab]");
+  if (closeBtn) {
+    e.stopPropagation();
+    closeTabById(Number(closeBtn.dataset.closeTab));
+    return;
+  }
+
+  const tabBtn = e.target.closest("[data-tab-id]");
+  if (!tabBtn) return;
+  activateTab(Number(tabBtn.dataset.tabId), { focusEditor: false });
+});
+
+tabsEl?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const tabBtn = e.target.closest("[data-tab-id]");
+  if (!tabBtn) return;
+  e.preventDefault();
+  activateTab(Number(tabBtn.dataset.tabId), { focusEditor: false });
+});
+
+outlineToggleBtn?.addEventListener("click", () => toggleOutlineVisibility());
+
+outlineTreeEl?.addEventListener("click", (e) => {
+  const toggle = e.target.closest("[data-outline-toggle]");
+  if (toggle) {
+    toggleOutlineNode(toggle.dataset.outlineToggle);
+    return;
+  }
+
+  const jump = e.target.closest("[data-outline-jump]");
+  if (!jump) return;
+  jumpToHeading(jump.dataset.outlineJump);
 });
 
 function clearDropTargets() {
@@ -1996,11 +2500,13 @@ treeEl.addEventListener("drop", async (e) => {
     if (toParent !== fromParent) await ensureDirLoaded(toParent);
     state.expandedDirs.add(toParent);
 
-    if (state.activeFile === from) {
-      state.activeFile = to;
-      setActivePath(to);
-      setDirty(false);
+    for (const tab of state.tabs) {
+      if (tab.filePath === from) tab.filePath = to;
     }
+
+    const current = getCurrentTab();
+    if (current) activateTab(current.id, { skipSync: true, focusEditor: false });
+    else renderTabs();
 
     renderTree();
     setStatus("Moved.");
@@ -2013,6 +2519,9 @@ treeEl.addEventListener("drop", async (e) => {
 
 editorEl.addEventListener("input", () => {
   if (!state.activeFile) return;
+  const tab = getCurrentTab();
+  if (tab) tab.content = editorEl.value;
+  syncOutline(editorEl.value);
   setDirty(editorEl.value !== state.activeFileContent);
   if (state.dirty) scheduleAutosave();
 });
@@ -2057,10 +2566,25 @@ document.addEventListener("keydown", async (e) => {
       setStatus(`Error: ${err.message}`);
     }
   }
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "w") {
+    const tab = getCurrentTab();
+    if (!tab) return;
+    e.preventDefault();
+    closeTabById(tab.id);
+  }
 });
 
-searchEl.addEventListener("input", () => {
+searchEl.addEventListener("input", async () => {
   state.filter = searchEl.value;
+  if (state.filter.trim()) {
+    try {
+      await ensureSearchTreeLoaded();
+    } catch (err) {
+      setStatus(`Error: ${err.message}`);
+      return;
+    }
+  }
   renderTree();
 });
 
@@ -2081,16 +2605,25 @@ newFileBtn.addEventListener("click", async () => {
 });
 
 window.addEventListener("beforeunload", (e) => {
-  if (!state.dirty) return;
+  if (!state.tabs.some((tab) => tab.isDirty)) return;
   e.preventDefault();
   e.returnValue = "";
 });
 
+window.addEventListener("pagehide", () => revokePreviewAssetUrls());
+
 function resetUiState() {
   clearAutosaveTimer();
+  revokePreviewAssetUrls();
   invalidateFileIndex();
+  state.searchTreePromise = null;
   state.expandedDirs = new Set([""]);
   state.childrenByDir = new Map();
+  state.tabs = [];
+  state.activeTabId = null;
+  state.nextTabId = 1;
+  state.outlineItems = [];
+  state.outlineExpandedIds = new Set();
   state.activeFile = null;
   state.activeFileContent = "";
   state.dirty = false;
@@ -2102,6 +2635,8 @@ function resetUiState() {
   editorEl.hidden = true;
   setActivePath("");
   setDirty(false);
+  renderTabs();
+  renderOutline();
 }
 
 async function selectLocalVault() {
@@ -2261,6 +2796,17 @@ if (themeToggleEl) {
   themeToggleEl.addEventListener("change", () => applyTheme(themeToggleEl.checked ? "light" : "dark"));
 }
 
+window.addEventListener("storage", (e) => {
+  if (e.key === "theme") {
+    applyTheme(e.newValue === "light" ? "light" : "dark");
+    return;
+  }
+
+  if (e.key === "dropboxAuthV1" && state.mode === "dropbox") {
+    state.dropbox = dropboxAuthStore.get();
+  }
+});
+
 if (vaultChooseBtn) {
   vaultChooseBtn.addEventListener("click", async () => {
     try {
@@ -2321,7 +2867,7 @@ window.addEventListener("message", async (ev) => {
 
     setStatus("Connecting to Dropbox…");
     const cfg = await dropboxGetConfig();
-    const redirectUri = cfg?.redirectUri || `${window.location.origin}/dropbox-oauth.html`;
+    const redirectUri = cfg?.redirectUri || appUrl("dropbox-oauth.html");
     const exchanged = await dropboxExchangeCode({ code, codeVerifier, redirectUri });
     const accessToken = (exchanged?.accessToken || "").toString();
     const refreshToken = (exchanged?.refreshToken || "").toString();
@@ -2397,16 +2943,7 @@ if (contextDeleteFileEl) {
       const parent = parentDirOf(p);
       state.childrenByDir.delete(parent);
       await ensureDirLoaded(parent);
-
-      if (state.activeFile === p) {
-        state.activeFile = null;
-        state.activeFileContent = "";
-        editorEl.value = "";
-        showPreview();
-        setActivePath("");
-        setDirty(false);
-      }
-
+      closeTabsForPath(p, { force: true });
       renderTree();
       setStatus("Deleted.");
     } catch (err) {
