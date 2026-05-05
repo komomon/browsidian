@@ -973,7 +973,7 @@ async function openWikiLinkTarget(target) {
       return;
     } catch {}
 
-    setStatus("Recherche du lien…");
+    setStatus("搜索链接中…");
     const index = await ensureFileIndex();
     const key = stripMdExtension(t).toLowerCase();
     const matches = index.get(key);
@@ -1403,8 +1403,12 @@ function showVaultModal() {
   vaultDialog.showModal();
 }
 
+function hasAnyDirtyTab() {
+  return state.tabs.some((tab) => tab.isDirty);
+}
+
 async function openDemoVault() {
-  if (state.dirty) {
+  if (hasAnyDirtyTab()) {
     const ok = confirm("You have unsaved changes. Continue without saving?");
     if (!ok) return;
   }
@@ -1432,7 +1436,7 @@ async function openDropboxVault() {
     alert("Dropbox is not configured on this server. Set DROPBOX_APP_KEY and DROPBOX_APP_SECRET (and redirect URI).");
     return;
   }
-  if (state.dirty) {
+  if (hasAnyDirtyTab()) {
     const ok = confirm("You have unsaved changes. Continue without saving?");
     if (!ok) return;
   }
@@ -1624,7 +1628,7 @@ async function getDirHandleByPath(dirRel, { create } = { create: false }) {
 async function getFileHandleByPath(fileRel, { create } = { create: false }) {
   const parts = splitPath(fileRel);
   const filename = parts.pop();
-  if (!filename) throw new Error("Chemin de fichier invalide");
+  if (!filename) throw new Error("无效的文件路径");
   const parentDir = parts.length ? parts.join("/") : "";
   const dirHandle = await getDirHandleByPath(parentDir, { create: Boolean(create) });
   return await dirHandle.getFileHandle(filename, { create: Boolean(create) });
@@ -2870,10 +2874,11 @@ function resetUiState() {
 
 function saveSession() {
   try {
+    const activeTab = getCurrentTab();
     const data = {
       expandedDirs: Array.from(state.expandedDirs),
       tabs: state.tabs.map((t) => ({ filePath: t.filePath, view: t.view })),
-      activeTabId: state.activeTabId,
+      activeFilePath: activeTab ? activeTab.filePath : null,
       selectedDir: state.selectedDir
     };
     localStorage.setItem("browsidianSessionV1", JSON.stringify(data));
@@ -2889,7 +2894,7 @@ async function restoreSession() {
 
     const expandedDirs = Array.isArray(data.expandedDirs) ? data.expandedDirs : [];
     const savedTabs = Array.isArray(data.tabs) ? data.tabs : [];
-    const activeTabId = typeof data.activeTabId === "number" ? data.activeTabId : null;
+    const activeFilePath = typeof data.activeFilePath === "string" ? data.activeFilePath : null;
     const selectedDir = typeof data.selectedDir === "string" ? data.selectedDir : null;
 
     // Restore selected dir
@@ -2919,11 +2924,11 @@ async function restoreSession() {
       newTab.view = r.view === "editor" ? "editor" : "preview";
     }
 
-    // Activate the previously active tab
-    if (activeTabId) {
-      const tab = getTabById(activeTabId);
+    // Activate the previously active tab (match by file path)
+    if (activeFilePath) {
+      const tab = state.tabs.find((t) => t.filePath === activeFilePath);
       if (tab) {
-        activateTab(activeTabId, { skipSync: true, focusEditor: false });
+        activateTab(tab.id, { skipSync: true, focusEditor: false });
         return;
       }
     }
@@ -2965,24 +2970,25 @@ async function pollOnce() {
 
     if (state.mode === "server") {
       const dirs = Array.from(state.expandedDirs);
-      if (dirs.length === 0) return;
-      const params = "dirs=" + dirs.map(encodeURIComponent).join(",");
-      const data = await apiGet("/api/dirhashes?" + params);
-      const hashes = data.hashes || {};
+      if (dirs.length > 0) {
+        const params = "dirs=" + dirs.map(encodeURIComponent).join(",");
+        const data = await apiGet("/api/dirhashes?" + params);
+        const hashes = data.hashes || {};
 
-      for (const d of dirs) {
-        const newHash = hashes[d] || "";
-        const oldHash = state.lastDirHashes.get(d) || "";
-        if (newHash === "" && oldHash !== "") {
-          state.expandedDirs.delete(d);
-          state.childrenByDir.delete(d);
-          state.lastDirHashes.delete(d);
-          treeNeedsRender = true;
-        } else if (newHash !== oldHash) {
-          state.lastDirHashes.set(d, newHash);
-          state.childrenByDir.delete(d);
-          await ensureDirLoaded(d).catch(() => {});
-          treeNeedsRender = true;
+        for (const d of dirs) {
+          const newHash = hashes[d] || "";
+          const oldHash = state.lastDirHashes.get(d) || "";
+          if (newHash === "" && oldHash !== "") {
+            state.expandedDirs.delete(d);
+            state.childrenByDir.delete(d);
+            state.lastDirHashes.delete(d);
+            treeNeedsRender = true;
+          } else if (newHash !== oldHash) {
+            state.lastDirHashes.set(d, newHash);
+            state.childrenByDir.delete(d);
+            await ensureDirLoaded(d).catch(() => {});
+            treeNeedsRender = true;
+          }
         }
       }
     } else if (state.mode === "browser" || state.mode === "dropbox") {
@@ -3043,7 +3049,7 @@ async function selectLocalVault() {
     alert("Your browser does not support folder selection (File System Access API). Try Chrome/Edge/Brave.");
     return;
   }
-  if (state.dirty) {
+  if (hasAnyDirtyTab()) {
     const ok = confirm("You have unsaved changes. Continue without saving?");
     if (!ok) return;
   }
@@ -3066,7 +3072,7 @@ async function selectLocalVault() {
 }
 
 async function switchToServerMode() {
-  if (state.dirty) {
+  if (hasAnyDirtyTab()) {
     const ok = confirm("You have unsaved changes. Continue without saving?");
     if (!ok) return;
   }
