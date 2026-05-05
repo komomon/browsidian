@@ -2,7 +2,9 @@
   <img src="img/browsidian.png" alt="Browsidian" width="96" />
 </p>
 
-# Browsidian
+# Browsidian <sup><small>community fork</small></sup>
+
+> **This is a community-maintained fork**, heavily modified from the [original Browsidian](https://github.com/mufeedvh/browsidian) by [mufeedvh](https://github.com/mufeedvh). This version adds session persistence, live file watching, full-text search, code highlighting, font/width toggles, image lightbox, and many bug fixes — with the goal of making Browsidian practical for daily Obsidian use behind a reverse proxy.
 
 A **zero-dependency** web app to browse, search, and edit an [Obsidian](https://obsidian.md) vault directly in your browser. No Electron, no npm build step — just a single Node.js server and vanilla JavaScript.
 
@@ -10,7 +12,22 @@ A **zero-dependency** web app to browse, search, and edit an [Obsidian](https://
 
 ![Screenshot](img/screenshot.png)
 
-## Why Browsidian
+## What's different from upstream
+
+This fork adds substantial features and fixes beyond the original:
+
+| Area | Upstream | This fork |
+|------|----------|-----------|
+| **Session** | Lost on refresh | Tabs, expanded dirs, active file all restored |
+| **File watching** | Manual refresh only | Auto-detects external changes every 5s |
+| **Content search** | File name only | Full-text search across all `.md` files |
+| **Code blocks** | Plain text | Syntax highlighting + copy button |
+| **Display** | Fixed | Font size toggle (S/M/L) + content width (full/medium/narrow) |
+| **Images** | Inline only | Click-to-zoom lightbox |
+| **Tree** | No refresh | Manual refresh button + auto-polling |
+| **Bug fixes** | — | 15+ bugs fixed (XSS, polling, state races, edge cases) |
+
+## Why this fork
 
 - **Zero dependencies** — the frontend is vanilla JS (no React, no bundler), the backend is raw Node.js `http` (no Express). Only highlight.js is loaded from CDN for code blocks.
 - **Four vault backends** — local disk (server mode), folder picker (browser mode), Dropbox (OAuth), or in-browser demo (localStorage). Switch anytime.
@@ -200,6 +217,12 @@ A hosted instance is available at **[browsidian.app.lamouche.fr](https://browsid
 3. Push and open a PR from your branch → `main`
 4. Describe the change, add screenshots for UI changes, and list manual checks
 
+## Credits
+
+- **Original Browsidian** by [mufeedvh](https://github.com/mufeedvh) — the foundation this fork is built on
+- **This fork** maintained by [komomon](https://github.com/komomon)
+- Built with <span style="color:#36d399;">♥</span> and vanilla JavaScript
+
 ## License
 
-MIT
+MIT — same as upstream.
