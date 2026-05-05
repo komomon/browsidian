@@ -17,6 +17,8 @@
     <link rel="icon" type="image/png" href="img/browsidian.png" />
     <link rel="apple-touch-icon" href="img/browsidian.png" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   </head>
   <body>
     <!-- Icon library (inline SVG symbols, no external dependencies) -->
@@ -49,6 +51,24 @@
           stroke-linecap="round"
           stroke-linejoin="round"
         />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M21.5 2v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M2.5 22v-6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M3.93 8.5a9 9 0 0 1 14.86-2.87L21.5 8M2.5 16l3.21 2.37A9 9 0 0 0 20.07 15.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-type" viewBox="0 0 24 24">
+        <path d="M4 7V4h16v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M9 20h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M12 4v16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2" />
+        <path d="M21 21l-4.3-4.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      </symbol>
+      <symbol id="i-columns" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="18" rx="1" fill="none" stroke="currentColor" stroke-width="2" />
+        <rect x="14" y="3" width="7" height="18" rx="1" fill="none" stroke="currentColor" stroke-width="2" />
       </symbol>
       <symbol id="i-plus" viewBox="0 0 24 24">
         <path d="M12 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -126,7 +146,14 @@
               </div>
             </div>
           </div>
-          <input id="search" class="search" placeholder="Search files…" autocomplete="off" hidden />
+          <div id="searchBar" class="search-bar" hidden>
+            <input id="search" class="search" placeholder="Search files…" autocomplete="off" />
+            <button id="searchModeBtn" class="btn btn-secondary" title="Search mode (file name / content)" aria-label="Toggle search mode">
+              <svg class="icon-svg" aria-hidden="true"><use href="#i-search"></use></svg>
+              <span id="searchModeLabel">File</span>
+            </button>
+          </div>
+          <div id="grepResults" class="grep-results" hidden></div>
           <div id="createActions" class="actions" hidden>
             <button id="newFileBtn" class="btn">
               <svg class="icon-svg" aria-hidden="true"><use href="#i-plus"></use></svg>
@@ -135,6 +162,10 @@
             <button id="newFolderBtn" class="btn btn-secondary">
               <svg class="icon-svg" aria-hidden="true"><use href="#i-folder"></use></svg>
               <span>New folder</span>
+            </button>
+            <button id="refreshTreeBtn" class="btn btn-secondary" title="Refresh directory tree" aria-label="Refresh directory tree">
+              <svg class="icon-svg" aria-hidden="true"><use href="#i-refresh"></use></svg>
+              <span>Refresh</span>
             </button>
           </div>
         </div>
@@ -153,6 +184,14 @@
             <button id="saveBtn" class="btn btn-primary" disabled>
               <svg class="icon-svg" aria-hidden="true"><use href="#i-save"></use></svg>
               <span>Save (Ctrl+S)</span>
+            </button>
+            <button id="fontSizeBtn" class="btn btn-secondary" title="Font size (small / medium / large)" aria-label="Toggle font size">
+              <svg class="icon-svg" aria-hidden="true"><use href="#i-type"></use></svg>
+              <span id="fontSizeLabel">Medium</span>
+            </button>
+            <button id="widthBtn" class="btn btn-secondary" title="Content width (full / medium / narrow)" aria-label="Toggle content width">
+              <svg class="icon-svg" aria-hidden="true"><use href="#i-columns"></use></svg>
+              <span id="widthLabel">Full</span>
             </button>
             <button id="outlineToggleBtn" class="btn btn-secondary" type="button" aria-expanded="true">
               <svg class="icon-svg" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
@@ -216,6 +255,10 @@
           </div>
         </footer>
       </main>
+    </div>
+
+    <div id="lightbox" class="lightbox" hidden>
+      <img id="lightboxImg" src="" alt="" />
     </div>
 
     <dialog id="promptDialog" class="dialog">

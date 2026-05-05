@@ -2,6 +2,7 @@ const http = require("http");
 const fsp = require("fs/promises");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { URL } = require("url");
 
 const DEFAULT_PORT = 5173;
@@ -103,6 +104,54 @@ async function listDir(vaultReal, dirRel) {
   }
   mapped.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
   return mapped;
+}
+
+async function dirhash(vaultReal, dirRel) {
+  try {
+    const entries = await listDir(vaultReal, dirRel);
+    const h = crypto.createHash("sha1");
+    for (const e of entries) {
+      h.update(e.name + "|" + e.type + "\n");
+    }
+    return h.digest("hex");
+  } catch {
+    return "";
+  }
+}
+
+async function* walk(vaultReal, dirRel) {
+  const entries = await listDir(vaultReal, dirRel);
+  for (const e of entries) {
+    if (e.type === "dir") {
+      yield* walk(vaultReal, e.path);
+    } else {
+      yield e.path;
+    }
+  }
+}
+
+async function grepFiles(vaultReal, query, maxResults = 50) {
+  const results = [];
+  const q = query.toLowerCase();
+  for await (const filePath of walk(vaultReal, "")) {
+    if (!filePath.toLowerCase().endsWith(".md")) continue;
+    try {
+      const content = await readFileUtf8(vaultReal, filePath);
+      const lines = content.split("\n");
+      const matches = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          matches.push({ line: i + 1, text: lines[i].substring(0, 200) });
+          if (matches.length >= 5) break;
+        }
+      }
+      if (matches.length > 0) {
+        results.push({ path: filePath, matches });
+        if (results.length >= maxResults) break;
+      }
+    } catch { /* skip unreadable files */ }
+  }
+  return results;
 }
 
 async function readFileUtf8(vaultReal, fileRel) {
@@ -505,6 +554,23 @@ async function main() {
           const dir = reqUrl.searchParams.get("dir") || "";
           const entries = await listDir(vaultReal, dir);
           return json(res, 200, { dir, entries });
+        }
+
+        if (req.method === "GET" && reqUrl.pathname === "/api/dirhashes") {
+          const dirsParam = reqUrl.searchParams.get("dirs");
+          const dirs = dirsParam !== null ? dirsParam.split(",") : [];
+          const hashes = {};
+          for (const d of dirs) {
+            hashes[d] = await dirhash(vaultReal, d);
+          }
+          return json(res, 200, { hashes });
+        }
+
+        if (req.method === "GET" && reqUrl.pathname === "/api/grep") {
+          const q = (reqUrl.searchParams.get("q") || "").trim();
+          if (!q) return json(res, 200, { results: [] });
+          const results = await grepFiles(vaultReal, q);
+          return json(res, 200, { results });
         }
 
         if (req.method === "GET" && reqUrl.pathname === "/api/read") {

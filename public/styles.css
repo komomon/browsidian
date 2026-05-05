@@ -32,6 +32,43 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
     "Segoe UI Emoji";
+
+  --editor-font-size: 13px;
+  --preview-font-size: 14px;
+  --preview-h1-size: 22px;
+  --preview-h2-size: 18px;
+  --preview-h3-size: 15px;
+  --preview-line-height: 1.55;
+  --preview-max-width: none;
+  --editor-max-width: none;
+}
+
+[data-font-size="small"] {
+  --editor-font-size: 12px;
+  --preview-font-size: 13px;
+  --preview-h1-size: 20px;
+  --preview-h2-size: 16px;
+  --preview-h3-size: 14px;
+  --preview-line-height: 1.45;
+}
+
+[data-font-size="large"] {
+  --editor-font-size: 15px;
+  --preview-font-size: 16px;
+  --preview-h1-size: 26px;
+  --preview-h2-size: 22px;
+  --preview-h3-size: 18px;
+  --preview-line-height: 1.65;
+}
+
+[data-readable-width="narrow"] {
+  --preview-max-width: 720px;
+  --editor-max-width: 720px;
+}
+
+[data-readable-width="medium"] {
+  --preview-max-width: 960px;
+  --editor-max-width: 960px;
 }
 
 [data-theme="light"] {
@@ -240,6 +277,24 @@ body {
   display: none;
 }
 
+.lightbox {
+  position: fixed;
+  z-index: 9999;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  cursor: default;
+}
+
 @media (min-width: 900px) {
   .icon-btn-label {
     display: inline;
@@ -266,11 +321,71 @@ body {
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+.search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.search-bar .search {
+  flex: 1;
+  margin-top: 0;
+}
+
+.grep-results {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+}
+
+.grep-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  cursor: pointer;
+}
+
+.grep-item:last-child {
+  border-bottom: none;
+}
+
+.grep-item:hover {
+  background: var(--hover-bg);
+}
+
+.grep-item-path {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.grep-item-match {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grep-empty {
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .actions {
   display: flex;
   gap: 10px;
   margin-top: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+#refreshTreeBtn {
+  margin-left: auto;
 }
 
 .btn {
@@ -530,6 +645,8 @@ body {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  max-width: var(--preview-max-width);
+  margin: 0 auto;
 }
 
 .textarea {
@@ -542,7 +659,7 @@ body {
   color: var(--text);
   padding: 14px 14px;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--editor-font-size);
   line-height: 1.45;
   outline: none;
 }
@@ -565,6 +682,8 @@ body {
   background: var(--panel);
   padding: 14px 14px;
   outline: none;
+  font-size: var(--preview-font-size);
+  line-height: var(--preview-line-height);
 }
 
 [data-theme="light"] .preview {
@@ -688,13 +807,13 @@ body {
 }
 
 .preview h1 {
-  font-size: 22px;
+  font-size: var(--preview-h1-size);
 }
 .preview h2 {
-  font-size: 18px;
+  font-size: var(--preview-h2-size);
 }
 .preview h3 {
-  font-size: 15px;
+  font-size: var(--preview-h3-size);
 }
 .preview h4 {
   font-size: 13px;
@@ -714,7 +833,8 @@ body {
 
 .preview p {
   margin: 0.55em 0;
-  line-height: 1.55;
+  font-size: var(--preview-font-size);
+  line-height: var(--preview-line-height);
 }
 
 .preview img {
@@ -780,6 +900,35 @@ body {
   background: transparent;
   border: none;
   padding: 0;
+}
+
+.preview pre {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--muted);
+  background: var(--control-bg);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.preview pre:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn.copied {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .preview blockquote {

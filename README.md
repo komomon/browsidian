@@ -4,226 +4,202 @@
 
 # Browsidian
 
-Browsidian is a local web app to browse and edit an Obsidian vault directly in your browser.
+A **zero-dependency** web app to browse, search, and edit an [Obsidian](https://obsidian.md) vault directly in your browser. No Electron, no npm build step — just a single Node.js server and vanilla JavaScript.
 
-This repository is a revamped version focused on making Browsidian practical for real self-hosted Obsidian use, especially when served behind a reverse proxy and used with larger note sets.
-
-## What's new in this revamp
-
-- Proper sub-path reverse proxy support for Caddy / Nginx deployments such as `/obobob/`
-- Relative Markdown image loading based on the current note path
-- Multi-note tabs for opening, switching, and closing several Markdown files at once
-- A right-side outline panel with Markdown heading navigation and collapse / expand support
-- Full-tree client-side search instead of only searching already-expanded folders
-- More stable app layout with fixed sidebar / toolbar / outline regions and independent content scrolling
+> Host it behind Caddy/Nginx, pick a local folder with the File System Access API, connect Dropbox, or try the in-browser demo vault. All four modes share the same UI.
 
 ![Screenshot](img/screenshot.png)
 
-It supports four working modes:
+## Why Browsidian
 
-- **Server mode**: a local Node.js server reads/writes files on disk in a configured vault folder.
-- **Browser mode**: the browser accesses a folder you pick (File System Access API) and edits it directly (no vault configured on the server).
-- **Demo mode**: a small in-browser “vault” stored in `localStorage` (useful for agents or browsers without folder picker support).
-- **Dropbox mode**: connect to Dropbox and work on a remote vault (all file operations happen in the cloud).
+- **Zero dependencies** — the frontend is vanilla JS (no React, no bundler), the backend is raw Node.js `http` (no Express). Only highlight.js is loaded from CDN for code blocks.
+- **Four vault backends** — local disk (server mode), folder picker (browser mode), Dropbox (OAuth), or in-browser demo (localStorage). Switch anytime.
+- **Session persistence** — open tabs, expanded directories, and the active file survive page refreshes (localStorage).
+- **Live file watching** — detects files created, modified, or deleted by another Obsidian client within 5 seconds (polling with SHA1 directory hashes).
+- **Obsidian-native** — wikilinks `[[Note]]`, `[[Note|Alias]]`, relative image paths `![](attachments/img.png)`, and `#tags` all work.
+- **Responsive layout** — sidebar tree, tabbed editor, outline panel, and status bar scale down to mobile widths.
+
+## Four vault modes
+
+| Mode | Storage | Best for |
+|------|---------|----------|
+| **Server** | Local disk via Node.js API | Self-hosting behind a reverse proxy |
+| **Browser** | Local folder via File System Access API | Quick access, no server vault configured |
+| **Dropbox** | Cloud via OAuth + Dropbox API | Remote vault, cross-device access |
+| **Demo** | In-browser localStorage | Testing, automation agents, browsers without folder picker |
 
 ## Features
 
-- Browse vault folders and files (tree view)
-- Search files by path/name across the vault tree (client-side filter)
-- Create folders and files
-- In creation dialogs, press Enter to confirm
-- New files must be Markdown (`.md`)
-- Edit Markdown with **auto-save** (~1s inactivity) and **Ctrl+S**
-- Open multiple notes in tabs and switch between them without losing context
-- View the current note outline on the right and jump to headings
-- **Preview mode** (basic Markdown → HTML) when not focused; click to edit Markdown
-- Non-`.md` files show "File not supported" in preview
-- Obsidian **wikilinks** in preview: `[[Note]]`, `[[Note|Alias]]` (click to navigate)
-- Relative Markdown images such as `![](attachment/image.png)` resolve from the current note folder
-- Basic Markdown tables in preview
-- Drag & drop a file onto a folder to move it
-- Click a folder to select it as the default destination for new files/folders
-- Dark / Light mode toggle (persisted in `localStorage`)
-- Subtle, consistent UI styling (dark + light)
-- Flat, subtle SVG icon set (no external dependencies)
-- App logo + favicon
-- Footer shows app version (from `/api/config` when available)
+### Vault browsing
+- Tree view with expand/collapse directories
+- **File name search** with instant client-side filtering across the full vault tree
+- **Full-text content search** across all `.md` files with match previews (server + local modes)
+- Manual **Refresh** button to re-sync the tree from disk
+- Click a **folder name** to select it as the default destination for new files/folders
+- Hidden directories: `.obsidian`, `.git`, `node_modules`, `.trash`, `.DS_Store`
+- **Drag & drop** files onto folders to move them (confirmation dialog)
+- Right-click **context menu** to delete files
+
+### Editing
+- Multi-tab editor — open several notes at once, switch with a click, close with `x` or **Ctrl+W**
+- **Auto-save** after ~1.2s of inactivity + manual **Ctrl+S** / **Save** button
+- Markdown **preview mode** with live HTML rendering
+- Click the preview to switch to editing; click away to return to preview
+- New files are automatically given `.md` extension
+- New files/folders default to the currently selected directory
+
+### Session persistence
+- Open tabs, expanded directories, active file, and selected folder are saved to `localStorage`
+- **Full state restoration** on page refresh — pick up exactly where you left off
+- Editor/preview view mode remembered per tab
+
+### Live file watching
+- Polls expanded directories every 5 seconds (no WebSocket needed)
+- Server mode: batched SHA1 hash comparison (single HTTP request)
+- Browser/Dropbox mode: directory re-listing with entry-level diff
+- Detects external file **creation, deletion, and modification**
+- Automatically closes tabs for externally deleted files
+
+### Markdown preview
+- Headings (`#` to `######`) with auto-generated anchor IDs
+- Bold, italic, inline code, fenced code blocks
+- Blockquotes, horizontal rules, ordered/unordered lists
+- Tables (GitHub-flavored, header + separator row)
+- Obsidian **wikilinks**: `[[Note]]`, `[[Note|Alias]]` (click to navigate, cross-directory resolution)
+- Obsidian **tags**: `#tag`, `#tag/sub-tag`
+- Relative **images**: `![](attachments/img.png)` resolves from the note's directory
+- External images and links open in new tabs
+
+### Code blocks
+- **Syntax highlighting** via highlight.js (auto-detected language)
+- **Copy button** on hover — one click copies the code block to clipboard
+
+### Outline panel
+- Right-side panel showing document headings (collapsible)
+- Click any heading to jump to it (smooth scroll in preview, cursor jump in editor)
+- Panel can be collapsed via the **Outline** toggle button
+
+### Display customization
+- **Font size**: small / medium / large (persisted)
+- **Content width**: full / medium (960px) / narrow (720px) for focused reading (persisted)
+- **Dark / Light** theme toggle (persisted)
+- All preferences survive page refreshes
+
+### Image lightbox
+- Click any image in the preview to open it full-size
+- **Esc** or click the overlay to close
+
+### UI details
+- Flat, consistent SVG icon set (zero external icon dependencies)
+- Status bar with app version, author credit, and GitHub link
+- Subtle animations: hover states, toggle transitions, button feedback
+- Proper sub-path reverse proxy support (`/obobob/` behind Caddy/Nginx)
 
 ## Requirements
 
-- Node.js 18+ (recommended)
+- Node.js 18+
 - For **Browser mode**: Chrome / Edge / Brave (File System Access API)
-
-## Production
-
-Use the hosted app (Browser + Demo modes):
-
-- https://browsidian.app.lamouche.fr/
-
-Notes:
-
-- The hosted app cannot access your filesystem in Server mode. Use Browser mode (folder picker) or Demo mode.
-- The hosted app exposes `/api/config` (for the version), but not the vault file APIs.
-- Dropbox mode requires server-side OAuth endpoints and `DROPBOX_APP_KEY`/`DROPBOX_APP_SECRET` env vars.
 
 ## Getting started
 
 ### Server mode (recommended for full Obsidian vault access)
 
-Start the server with a vault:
-
 ```bash
 node server.js --vault /path/to/your/vault
-```
-
-Or via env var:
-
-```bash
-OBSIDIAN_VAULT=/path/to/your/vault npm start
+# or
+OBSIDIAN_VAULT=/path/to/your/vault node server.js
 ```
 
 Open: `http://127.0.0.1:5173`
 
-Reverse proxy note:
+Custom port and host:
 
-- Browsidian can be served from a sub-path such as `/obobob/` behind Caddy or Nginx.
-- Example: `handle_path /obobob/* { reverse_proxy http://127.0.0.1:5173 }`
+```bash
+node server.js --vault /path/to/vault --port 8080 --host 0.0.0.0
+```
+
+### Reverse proxy (Caddy example)
+
+```
+handle_path /obsidian/* {
+    reverse_proxy http://127.0.0.1:5173
+}
+```
+
+The app auto-detects its base path from the `<base>` tag — no extra configuration needed.
 
 ### Browser mode (no server vault)
 
-Start the server without `OBSIDIAN_VAULT`/`--vault`:
+Start the server without a vault:
 
 ```bash
-npm start
+node server.js
 ```
 
-Open the app, then click **Choose local vault** and select your vault folder.
+Open the app, click **Choose local vault**, and select your Obsidian folder. The browser requests read/write permission once.
 
 ### Demo mode
 
-If your browser (or an automation agent) cannot use the folder picker, click **Try demo vault** in the “Open a vault” dialog.
-The demo opens `Welcome.md` by default.
+Click **Try demo vault** in the startup dialog. Everything stays in `localStorage` — useful for testing or automation agents.
 
 ### Dropbox mode
 
-To use a vault stored on Dropbox, click **Connect Dropbox** in the “Open a vault” dialog and follow the OAuth flow.
-Then pick the vault folder using the built-in Dropbox folder navigator (browse subfolders, go up, and optionally create a new folder).
-
-Server configuration (local or Vercel):
+Set environment variables on the server:
 
 - `DROPBOX_APP_KEY`
 - `DROPBOX_APP_SECRET`
-- `DROPBOX_REDIRECT_URI` (must be whitelisted in your Dropbox app, e.g. `https://your-domain/dropbox-oauth.html`)
+- `DROPBOX_REDIRECT_URI` (must match your Dropbox app's redirect URI whitelist)
 
-Note: Dropbox file operations are proxied through the app backend (`/api/dropbox/files/*`) to avoid browser CORS limitations.
+Then click **Connect Dropbox** in the app, complete the OAuth flow, and pick a vault folder using the built-in Dropbox folder navigator.
 
-Troubleshooting:
+Dropbox file operations are proxied through `/api/dropbox/files/*` to avoid browser CORS limitations.
 
-- If Dropbox connect fails with an HTTP error, check the status bar message (it includes the backend error body when available).
-- The Dropbox folder path is a Dropbox path (e.g. `/Apps/ObsidianVault`), not a local path like `/Applications/...`.
-- If the folder doesn’t exist, the app can create it for you (optional prompt).
+## Production
 
-## Contributing (GitHub workflow)
-
-This project uses a simple GitHub collaboration flow: work on a dedicated branch, then open a Pull Request (PR) to merge into `main`.
-
-### 1) Create a working branch
-
-Always branch from `main` and use the `features/my-feature` naming convention:
-
-```bash
-git checkout main
-git pull --ff-only
-git checkout -b features/my-feature
-```
-
-### 2) Develop and commit
-
-- Keep changes focused (small PRs are easier to review).
-- Use clear commit messages (what/why). If you rewrite history on your branch, use `git push --force-with-lease` (never on `main`).
-- Update documentation (`README.md`) when behavior/usage changes.
-- Avoid committing personal vault content or secrets (this app is meant to run locally).
-
-### 3) Push and open a Pull Request
-
-```bash
-git push -u origin features/my-feature
-```
-
-Then on GitHub:
-
-- Open a **Pull Request** from `features/my-feature` → `main`.
-- Describe the change, add screenshots if UI changes, and list any manual checks you ran (e.g. `npm start`).
-- Request a review and address feedback with follow-up commits.
-
-### 4) Keep your branch up to date (optional)
-
-If `main` moved while you were working:
-
-```bash
-git fetch origin
-git rebase origin/main
-```
-
-## UI behavior
-
-- **Preview vs Edit**
-  - When a file is opened, the app shows an HTML preview.
-  - Click the preview to switch to Markdown editing.
-  - When the editor loses focus, it switches back to preview.
-- **Vault controls**
-  - Change/Disconnect actions are shown next to the current vault name.
-- **Folder selection**
-  - Click a folder row (name) to select it.
-  - Selecting a folder changes the default destination for new files/folders without closing the current note.
-  - Creating a new file/folder pre-fills its path using the selected folder.
-  - Click the folder icon to expand/collapse.
-  - When a folder path is pre-filled (ending with `/`), the cursor is placed at the end (no auto-selection).
-- **Saving**
-  - Auto-save runs after ~1.2s without typing (when a file is dirty).
-  - You can always press **Ctrl+S** (or click **Save**) to save immediately.
-- **Moving files**
-  - Drag a file from the tree and drop it on a folder to move it there (a confirmation dialog is shown).
-  - You can also drop on empty tree space to move into the selected folder (or the vault root if none is selected).
-
-## Markdown preview support (basic)
-
-The preview is intentionally simple (no external dependencies). It supports:
-
-- Headings (`#` to `######`)
-- Paragraphs
-- Line breaks inside paragraphs (single newline → line break)
-- Bold/italic
-- Inline code and fenced code blocks (```…```)
-- Blockquotes
-- Horizontal rules
-- Links: `[label](https://example.com)`
-- Images: `![alt](/img/browsidian.png)`
-- Tables (header + separator row)
-- Obsidian wikilinks: `[[Note]]`, `[[Note|Alias]]`
-
-Notes:
-
-- Section anchors in wikilinks (e.g. `[[Note#Heading]]`) are ignored for now (the file opens, but it does not scroll).
-- Table alignment markers are ignored (rendered as a normal table).
+A hosted instance is available at **[browsidian.app.lamouche.fr](https://browsidian.app.lamouche.fr/)** (Browser + Demo modes only; Server and Dropbox modes require running your own server).
 
 ## Security model
 
-- In **Server mode**, file operations are restricted to the configured vault root (prevents `..` path traversal).
-- In both modes, some directories are hidden from the tree: `.obsidian`, `.git`, `node_modules`, `.trash`, `.DS_Store`.
-- In **Demo mode**, files are stored in your browser `localStorage` (no disk access).
-- This app is meant to run locally on your laptop. Do not expose it publicly.
+- **Path traversal protection**: all file operations are constrained to the vault root (resolved realpath + prefix check).
+- **Hidden directories**: `.obsidian`, `.git`, `node_modules`, `.trash`, `.DS_Store` are excluded.
+- **Demo mode**: all data stays in the browser's `localStorage` — no disk or network access.
+- **XSS prevention**: all user-generated Markdown content is HTML-escaped before rendering.
+- This app is designed to run on your local machine or a private server. Do not expose it to the public internet without authentication.
+
+## Markdown preview coverage
+
+| Element | Support |
+|---------|---------|
+| Headings (`#` – `######`) | Full, with auto-generated IDs for outline navigation |
+| Bold / Italic | `**bold**`, `*italic*` |
+| Inline code | `` `code` `` |
+| Fenced code blocks | ` ```language ``` ` with syntax highlighting |
+| Blockquotes | `>` single-level |
+| Horizontal rules | `---`, `***` |
+| Unordered lists | `-`, `*` |
+| Ordered lists | `1.`, `2.` |
+| Tables | GitHub-style with header separator |
+| Links | `[text](url)` external + `[[wikilinks]]` internal |
+| Images | `![alt](path)` with relative vault path resolution |
+| Tags | `#tag`, `#tag/sub-tag` |
+| Task lists | Not yet supported |
+| Footnotes | Not yet supported |
+| Callouts | Not yet supported |
 
 ## Troubleshooting
 
-- **I still see old UI text / behavior**
-  - Hard refresh the page (disable cache).
-  - Ensure you restarted the running `node server.js` process.
-- **Choose local vault button is disabled**
-  - Use Chrome/Edge/Brave and serve the app from `http://127.0.0.1` (recommended).
-- **I can’t edit files in Browser mode**
-  - The browser will ask for permission to read/write the selected folder. Accept it.
+- **Old UI after update**: hard-refresh the page (Ctrl+Shift+R) and restart the server.
+- **Choose local vault grayed out**: use Chrome / Edge / Brave served from `http://127.0.0.1`.
+- **Can't edit in Browser mode**: accept the read/write permission prompt from the browser.
+- **Dropbox connect fails**: check the status bar for the backend error message. Verify the redirect URI is whitelisted in your Dropbox app.
+
+## Contributing
+
+1. Branch from `main`: `git checkout -b features/my-feature`
+2. Keep changes focused, use clear commit messages
+3. Push and open a PR from your branch → `main`
+4. Describe the change, add screenshots for UI changes, and list manual checks
 
 ## License
 
-Not specified.
+MIT

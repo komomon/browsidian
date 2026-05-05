@@ -1,5 +1,9 @@
 const treeEl = document.getElementById("tree");
 const searchEl = document.getElementById("search");
+const searchBarEl = document.getElementById("searchBar");
+const searchModeBtn = document.getElementById("searchModeBtn");
+const searchModeLabel = document.getElementById("searchModeLabel");
+const grepResultsEl = document.getElementById("grepResults");
 const editorEl = document.getElementById("editor");
 const previewEl = document.getElementById("preview");
 const outlineEl = document.getElementById("outline");
@@ -13,11 +17,18 @@ const dirtyEl = document.getElementById("dirty");
 const vaultNameEl = document.getElementById("vaultName");
 const newFileBtn = document.getElementById("newFileBtn");
 const newFolderBtn = document.getElementById("newFolderBtn");
+const refreshTreeBtn = document.getElementById("refreshTreeBtn");
 const selectVaultBtn = document.getElementById("selectVaultBtn");
 const useServerBtn = document.getElementById("useServerBtn");
 const createActionsEl = document.getElementById("createActions");
 const appVersionEl = document.getElementById("appVersion");
 const themeToggleEl = document.getElementById("themeToggle");
+const fontSizeBtn = document.getElementById("fontSizeBtn");
+const fontSizeLabel = document.getElementById("fontSizeLabel");
+const widthBtn = document.getElementById("widthBtn");
+const widthLabel = document.getElementById("widthLabel");
+const lightboxEl = document.getElementById("lightbox");
+const lightboxImg = document.getElementById("lightboxImg");
 const contextMenuEl = document.getElementById("contextMenu");
 const contextDeleteFileEl = document.getElementById("contextDeleteFile");
 
@@ -68,7 +79,10 @@ const state = {
   fileIndexPromise: null,
   searchTreePromise: null,
   previewAssetUrls: new Set(),
-  previewRenderToken: 0
+  previewRenderToken: 0,
+  lightboxBlobUrl: null,
+  lastDirHashes: new Map(),
+  pollTimer: null
 };
 
 const IGNORED_DIRS = new Set([".obsidian", ".git", "node_modules", ".trash", ".DS_Store"]);
@@ -166,6 +180,7 @@ function closeTabById(tabId, { force = false } = {}) {
   state.tabs.splice(idx, 1);
   if (state.activeTabId !== tabId) {
     renderTabs();
+    saveSession();
     return true;
   }
 
@@ -181,6 +196,7 @@ function closeTabById(tabId, { force = false } = {}) {
   renderTabs();
   renderTree();
   setStatus("Ready.");
+  saveSession();
   return true;
 }
 
@@ -214,6 +230,7 @@ function activateTab(tabId, { skipSync = false, focusEditor = false } = {}) {
   renderTree();
   if (tab.view === "editor") showEditor({ focus: focusEditor });
   else showPreview();
+  saveSession();
 }
 
 function slugifyHeading(text) {
@@ -1057,6 +1074,33 @@ function revokePreviewAssetUrls() {
   state.previewAssetUrls.clear();
 }
 
+function addCodeCopyButtons() {
+  const blocks = previewEl.querySelectorAll("pre");
+  for (const pre of blocks) {
+    if (pre.querySelector(".copy-btn")) continue;
+    const btn = document.createElement("button");
+    btn.className = "copy-btn";
+    btn.textContent = "Copy";
+    btn.addEventListener("click", async () => {
+      const code = pre.querySelector("code");
+      const text = code ? code.textContent : pre.textContent;
+      try {
+        await navigator.clipboard.writeText(text || "");
+        btn.textContent = "Copied!";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = "Copy";
+          btn.classList.remove("copied");
+        }, 1800);
+      } catch {
+        btn.textContent = "Failed";
+        setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+      }
+    });
+    pre.appendChild(btn);
+  }
+}
+
 async function hydratePreviewAssets(renderToken) {
   const images = Array.from(previewEl.querySelectorAll("img[data-vault-path]"));
   for (const img of images) {
@@ -1326,8 +1370,11 @@ function showPreview() {
       ? renderMarkdownBasic(content, state.activeFile, extractHeadings(content))
       : `<div class="muted">File not supported</div>`
     : `<div class="muted">Select a file on the left…</div>`;
+  if (typeof hljs !== "undefined") hljs.highlightAll();
+  addCodeCopyButtons();
   const tab = getCurrentTab();
   if (tab) tab.view = "preview";
+  saveSession();
   if (state.activeFile && isMd) {
     void hydratePreviewAssets(renderToken);
   }
@@ -1341,6 +1388,7 @@ function showEditor({ focus } = { focus: true }) {
   syncOutline(editorEl.value);
   const tab = getCurrentTab();
   if (tab) tab.view = "editor";
+  saveSession();
   if (focus) editorEl.focus();
 }
 
@@ -1370,7 +1418,10 @@ async function openDemoVault() {
   resetUiState();
   await ensureDirLoaded("");
   renderTree();
-  await openFile("Welcome.md").catch(() => {});
+  await restoreSession();
+  renderTree();
+  if (!state.activeFile) await openFile("Welcome.md").catch(() => {});
+  startPolling();
   setStatus("Ready.");
   if (vaultDialog?.open) vaultDialog.close();
 }
@@ -1443,7 +1494,7 @@ async function openDropboxVault() {
 
 function setVaultUiEnabled(enabled) {
   const on = Boolean(enabled);
-  if (searchEl) searchEl.hidden = !on;
+  if (searchBarEl) searchBarEl.hidden = !on;
   if (createActionsEl) createActionsEl.hidden = !on;
 }
 
@@ -1855,6 +1906,7 @@ async function toggleDir(dir) {
   if (state.expandedDirs.has(d)) {
     state.expandedDirs.delete(d);
     renderTree();
+    saveSession();
     return;
   }
   setStatus(`Loading: ${d || "/"}`);
@@ -1862,6 +1914,7 @@ async function toggleDir(dir) {
   state.expandedDirs.add(d);
   setStatus("Ready.");
   renderTree();
+  saveSession();
 }
 
 async function openFile(filePath) {
@@ -1879,6 +1932,7 @@ async function openFile(filePath) {
   const tab = createTab(filePath, content);
   activateTab(tab.id, { skipSync: true, focusEditor: false });
   setStatus("Ready.");
+  saveSession();
 }
 
 async function saveCurrent() {
@@ -2282,6 +2336,7 @@ function parentDirOf(pathStr) {
 function setSelectedDir(dirRel) {
   state.selectedDir = normalizeDir(dirRel);
   renderTree();
+  saveSession();
 }
 
 function clearActiveFile() {
@@ -2546,8 +2601,32 @@ previewEl.addEventListener("click", async (e) => {
     }
     return;
   }
+  const img = e.target.closest("img");
+  if (img && lightboxEl && lightboxImg) {
+    lightboxImg.src = img.src;
+    lightboxImg.alt = img.alt || "";
+    if (img.src.startsWith("blob:")) {
+      state.lightboxBlobUrl = img.src;
+      state.previewAssetUrls.delete(img.src);
+    }
+    lightboxEl.hidden = false;
+    return;
+  }
   showEditor({ focus: true });
 });
+
+function closeLightbox() {
+  if (!lightboxEl) return;
+  lightboxEl.hidden = true;
+  if (state.lightboxBlobUrl) {
+    URL.revokeObjectURL(state.lightboxBlobUrl);
+    state.lightboxBlobUrl = null;
+  }
+}
+
+if (lightboxEl) {
+  lightboxEl.addEventListener("click", () => closeLightbox());
+}
 
 saveBtn.addEventListener("click", async () => {
   try {
@@ -2558,6 +2637,11 @@ saveBtn.addEventListener("click", async () => {
 });
 
 document.addEventListener("keydown", async (e) => {
+  if (e.key === "Escape" && lightboxEl && !lightboxEl.hidden) {
+    closeLightbox();
+    return;
+  }
+
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     try {
@@ -2575,22 +2659,163 @@ document.addEventListener("keydown", async (e) => {
   }
 });
 
+let searchMode = "file";
+let grepDebounceTimer = null;
+
+if (searchModeBtn) {
+  searchModeBtn.addEventListener("click", () => {
+    searchMode = searchMode === "file" ? "content" : "file";
+    if (searchModeLabel) searchModeLabel.textContent = searchMode === "file" ? "File" : "Content";
+    searchEl.placeholder = searchMode === "file" ? "Search files…" : "Search content…";
+    searchEl.value = "";
+    state.filter = "";
+    if (grepDebounceTimer) clearTimeout(grepDebounceTimer);
+    if (grepResultsEl) grepResultsEl.hidden = true;
+    renderTree();
+  });
+}
+
 searchEl.addEventListener("input", async () => {
-  state.filter = searchEl.value;
-  if (state.filter.trim()) {
-    try {
-      await ensureSearchTreeLoaded();
-    } catch (err) {
-      setStatus(`Error: ${err.message}`);
+  if (searchMode === "file") {
+    state.filter = searchEl.value;
+    if (state.filter.trim()) {
+      try {
+        await ensureSearchTreeLoaded();
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+        return;
+      }
+    }
+    if (grepResultsEl) grepResultsEl.hidden = true;
+    renderTree();
+  } else {
+    state.filter = "";
+    renderTree();
+    if (grepDebounceTimer) clearTimeout(grepDebounceTimer);
+    const query = searchEl.value.trim();
+    if (!query) {
+      if (grepResultsEl) grepResultsEl.hidden = true;
       return;
     }
+    grepDebounceTimer = setTimeout(() => doGrep(query), 300);
   }
-  renderTree();
 });
+
+async function doGrep(query) {
+  if (!grepResultsEl) return;
+  try {
+    setStatus(`Searching: ${query}`);
+    let results = [];
+    if (state.mode === "server") {
+      const data = await apiGet(`/api/grep?q=${encodeURIComponent(query)}`);
+      results = data.results || [];
+    } else {
+      results = await grepLocal(query);
+    }
+    renderGrepResults(results, query);
+    setStatus(results.length > 0 ? `Found ${results.length} files.` : "No matches.");
+  } catch (err) {
+    setStatus(`Error: ${err.message}`);
+    if (grepResultsEl) grepResultsEl.hidden = true;
+  }
+}
+
+async function grepLocal(query) {
+  const results = [];
+  const q = query.toLowerCase();
+  const allFiles = [];
+  function collect(dir) {
+    const entries = state.childrenByDir.get(dir) || [];
+    for (const e of entries) {
+      if (e.type === "dir") collect(e.path);
+      else if (e.name.toLowerCase().endsWith(".md")) allFiles.push(e.path);
+    }
+  }
+  await ensureSearchTreeLoaded().catch(() => {});
+  collect("");
+  for (const fp of allFiles) {
+    if (results.length >= 50) break;
+    try {
+      const content = await readFile(fp);
+      const lines = content.split("\n");
+      const matches = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          matches.push({ line: i + 1, text: lines[i].substring(0, 200) });
+          if (matches.length >= 5) break;
+        }
+      }
+      if (matches.length > 0) results.push({ path: fp, matches });
+    } catch { /* skip */ }
+  }
+  return results;
+}
+
+function renderGrepResults(results, query) {
+  if (!grepResultsEl) return;
+  grepResultsEl.innerHTML = "";
+  if (results.length === 0) {
+    grepResultsEl.innerHTML = `<div class="grep-empty">No files matched "${escapeHtml(query)}"</div>`;
+    grepResultsEl.hidden = false;
+    return;
+  }
+  for (const r of results) {
+    const item = document.createElement("div");
+    item.className = "grep-item";
+    const pathDiv = document.createElement("div");
+    pathDiv.className = "grep-item-path";
+    pathDiv.textContent = r.path;
+    item.appendChild(pathDiv);
+    for (const m of r.matches.slice(0, 3)) {
+      const matchDiv = document.createElement("div");
+      matchDiv.className = "grep-item-match";
+      matchDiv.textContent = `${m.line}: ${m.text}`;
+      item.appendChild(matchDiv);
+    }
+    item.addEventListener("click", () => {
+      grepResultsEl.hidden = true;
+      openFile(r.path).catch(() => {});
+    });
+    grepResultsEl.appendChild(item);
+  }
+  grepResultsEl.hidden = false;
+}
 
 newFolderBtn.addEventListener("click", async () => {
   try {
     await createFolder();
+  } catch (err) {
+    setStatus(`Error: ${err.message}`);
+  }
+});
+
+refreshTreeBtn.addEventListener("click", async () => {
+  try {
+    setStatus("Refreshing…");
+    const dirs = Array.from(state.expandedDirs);
+    await Promise.all(dirs.map(d => {
+      state.childrenByDir.delete(d);
+      return ensureDirLoaded(d).catch(() => {});
+    }));
+    if (state.activeFile) {
+      try {
+        const content = await readFile(state.activeFile);
+        if (!state.dirty && content !== editorEl.value) {
+          editorEl.value = content;
+          state.activeFileContent = content;
+          const tab = getCurrentTab();
+          if (tab) { tab.content = content; tab.savedContent = content; }
+        }
+      } catch {
+        const deletedPath = state.activeFile;
+        closeTabsForPath(deletedPath, { force: true });
+        const parent = parentDirOf(deletedPath);
+        state.childrenByDir.delete(parent);
+        await ensureDirLoaded(parent);
+      }
+    }
+    renderTree();
+    setStatus("Refreshed.");
   } catch (err) {
     setStatus(`Error: ${err.message}`);
   }
@@ -2613,10 +2838,13 @@ window.addEventListener("beforeunload", (e) => {
 window.addEventListener("pagehide", () => revokePreviewAssetUrls());
 
 function resetUiState() {
+  stopPolling();
   clearAutosaveTimer();
+  closeLightbox();
   revokePreviewAssetUrls();
   invalidateFileIndex();
   state.searchTreePromise = null;
+  state.lastDirHashes = new Map();
   state.expandedDirs = new Set([""]);
   state.childrenByDir = new Map();
   state.tabs = [];
@@ -2637,6 +2865,177 @@ function resetUiState() {
   setDirty(false);
   renderTabs();
   renderOutline();
+  if (grepResultsEl) grepResultsEl.hidden = true;
+}
+
+function saveSession() {
+  try {
+    const data = {
+      expandedDirs: Array.from(state.expandedDirs),
+      tabs: state.tabs.map((t) => ({ filePath: t.filePath, view: t.view })),
+      activeTabId: state.activeTabId,
+      selectedDir: state.selectedDir
+    };
+    localStorage.setItem("browsidianSessionV1", JSON.stringify(data));
+  } catch { /* storage full or unavailable */ }
+}
+
+async function restoreSession() {
+  try {
+    const raw = localStorage.getItem("browsidianSessionV1");
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return;
+
+    const expandedDirs = Array.isArray(data.expandedDirs) ? data.expandedDirs : [];
+    const savedTabs = Array.isArray(data.tabs) ? data.tabs : [];
+    const activeTabId = typeof data.activeTabId === "number" ? data.activeTabId : null;
+    const selectedDir = typeof data.selectedDir === "string" ? data.selectedDir : null;
+
+    // Restore selected dir
+    if (selectedDir) {
+      state.selectedDir = selectedDir;
+    }
+
+    // Restore expanded dirs (parallel)
+    state.expandedDirs = new Set([""]);
+    const dirsToLoad = expandedDirs.filter(Boolean);
+    await Promise.all(dirsToLoad.map(d => ensureDirLoaded(d).catch(() => {})));
+    for (const d of dirsToLoad) state.expandedDirs.add(d);
+
+    // Restore tabs (parallel re-read from disk)
+    const tabResults = await Promise.all(savedTabs.map(async (t) => {
+      if (!t || typeof t.filePath !== "string") return null;
+      if (state.tabs.find((x) => x.filePath === t.filePath)) return null;
+      try {
+        const content = await readFile(t.filePath);
+        return { filePath: t.filePath, content, view: t.view };
+      } catch { return null; }
+    }));
+    for (const r of tabResults) {
+      if (!r) continue;
+      if (state.tabs.find((x) => x.filePath === r.filePath)) continue;
+      const newTab = createTab(r.filePath, r.content);
+      newTab.view = r.view === "editor" ? "editor" : "preview";
+    }
+
+    // Activate the previously active tab
+    if (activeTabId) {
+      const tab = getTabById(activeTabId);
+      if (tab) {
+        activateTab(activeTabId, { skipSync: true, focusEditor: false });
+        return;
+      }
+    }
+
+    // If no tab was activated but we have tabs, activate the first
+    if (state.tabs.length > 0 && !state.activeTabId) {
+      activateTab(state.tabs[0].id, { skipSync: true, focusEditor: false });
+    }
+  } catch { /* ignore corrupt session */ }
+}
+
+function scheduleNextPoll() {
+  if (state.pollTimer === null) return;
+  state.pollTimer = setTimeout(async () => {
+    await pollOnce();
+    if (state.pollTimer !== null) scheduleNextPoll();
+  }, 5000);
+}
+
+function startPolling() {
+  stopPolling();
+  if (state.mode === "demo") return;
+  state.pollTimer = true;
+  scheduleNextPoll();
+}
+
+function stopPolling() {
+  if (state.pollTimer) {
+    clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+}
+
+async function pollOnce() {
+  if (state.mode === "demo") return;
+
+  try {
+    let treeNeedsRender = false;
+
+    if (state.mode === "server") {
+      const dirs = Array.from(state.expandedDirs);
+      if (dirs.length === 0) return;
+      const params = "dirs=" + dirs.map(encodeURIComponent).join(",");
+      const data = await apiGet("/api/dirhashes?" + params);
+      const hashes = data.hashes || {};
+
+      for (const d of dirs) {
+        const newHash = hashes[d] || "";
+        const oldHash = state.lastDirHashes.get(d) || "";
+        if (newHash === "" && oldHash !== "") {
+          state.expandedDirs.delete(d);
+          state.childrenByDir.delete(d);
+          state.lastDirHashes.delete(d);
+          treeNeedsRender = true;
+        } else if (newHash !== oldHash) {
+          state.lastDirHashes.set(d, newHash);
+          state.childrenByDir.delete(d);
+          await ensureDirLoaded(d).catch(() => {});
+          treeNeedsRender = true;
+        }
+      }
+    } else if (state.mode === "browser" || state.mode === "dropbox") {
+      for (const d of state.expandedDirs) {
+        const cached = state.childrenByDir.get(d);
+        if (!cached) continue;
+        try {
+          const fresh = await listDir(d);
+          const cachedNames = cached.map(e => e.name + "|" + e.type).sort().join("\n");
+          const freshNames = fresh.map(e => e.name + "|" + e.type).sort().join("\n");
+          if (cachedNames !== freshNames) {
+            state.childrenByDir.set(d, fresh);
+            treeNeedsRender = true;
+          }
+        } catch {
+          state.expandedDirs.delete(d);
+          state.childrenByDir.delete(d);
+          treeNeedsRender = true;
+        }
+      }
+    }
+
+    if (treeNeedsRender) {
+      renderTree();
+    }
+
+    // Check if active file was modified or deleted externally
+    if (state.activeFile) {
+      try {
+        const content = await readFile(state.activeFile);
+        if (!state.dirty && content !== editorEl.value) {
+          editorEl.value = content;
+          state.activeFileContent = content;
+          const tab = getCurrentTab();
+          if (tab) {
+            tab.content = content;
+            tab.savedContent = content;
+            tab.isDirty = false;
+          }
+          setDirty(false);
+          if (editorEl.hidden) showPreview();
+        }
+      } catch {
+        const deletedPath = state.activeFile;
+        setStatus(`File deleted externally: ${deletedPath}`);
+        closeTabsForPath(deletedPath, { force: true });
+        const parent = parentDirOf(deletedPath);
+        state.childrenByDir.delete(parent);
+        await ensureDirLoaded(parent);
+        renderTree();
+      }
+    }
+  } catch { /* silently ignore poll errors */ }
 }
 
 async function selectLocalVault() {
@@ -2660,6 +3059,9 @@ async function selectLocalVault() {
   resetUiState();
   await ensureDirLoaded("");
   renderTree();
+  await restoreSession();
+  renderTree();
+  startPolling();
   setStatus("Ready.");
 }
 
@@ -2688,6 +3090,9 @@ async function switchToServerMode() {
   setVaultUiEnabled(true);
   await ensureDirLoaded("");
   renderTree();
+  await restoreSession();
+  renderTree();
+  startPolling();
   setStatus("Ready.");
 }
 
@@ -2711,6 +3116,9 @@ async function restoreLocalVaultFromStorage() {
   resetUiState();
   await ensureDirLoaded("");
   renderTree();
+  await restoreSession();
+  renderTree();
+  startPolling();
   setStatus("Ready.");
   if (vaultDialog?.open) vaultDialog.close();
   return true;
@@ -2782,6 +3190,9 @@ async function bootstrap() {
   setVaultUiEnabled(true);
   await ensureDirLoaded("");
   renderTree();
+  await restoreSession();
+  renderTree();
+  startPolling();
   setStatus("Ready.");
 }
 
@@ -2795,6 +3206,58 @@ try {
 if (themeToggleEl) {
   themeToggleEl.addEventListener("change", () => applyTheme(themeToggleEl.checked ? "light" : "dark"));
 }
+
+const FONT_SIZES = ["small", "medium", "large"];
+const FONT_LABELS = { small: "Small", medium: "Medium", large: "Large" };
+
+function applyFontSize(size) {
+  const s = FONT_SIZES.includes(size) ? size : "medium";
+  if (s === "medium") delete document.documentElement.dataset.fontSize;
+  else document.documentElement.dataset.fontSize = s;
+  if (fontSizeLabel) fontSizeLabel.textContent = FONT_LABELS[s];
+  try { localStorage.setItem("fontSize", s); } catch {}
+}
+
+if (fontSizeBtn) {
+  fontSizeBtn.addEventListener("click", () => {
+    const cur = document.documentElement.dataset.fontSize || "medium";
+    const idx = FONT_SIZES.indexOf(cur);
+    const next = FONT_SIZES[(idx + 1) % FONT_SIZES.length];
+    applyFontSize(next);
+  });
+}
+
+(function initFontSize() {
+  let saved = "medium";
+  try { saved = localStorage.getItem("fontSize") || "medium"; } catch {}
+  applyFontSize(FONT_SIZES.includes(saved) ? saved : "medium");
+})();
+
+const WIDTHS = ["full", "medium", "narrow"];
+const WIDTH_LABELS = { full: "Full", medium: "Medium", narrow: "Narrow" };
+
+function applyWidth(size) {
+  const s = WIDTHS.includes(size) ? size : "full";
+  if (s === "full") delete document.documentElement.dataset.readableWidth;
+  else document.documentElement.dataset.readableWidth = s;
+  if (widthLabel) widthLabel.textContent = WIDTH_LABELS[s];
+  try { localStorage.setItem("readableWidth", s); } catch {}
+}
+
+if (widthBtn) {
+  widthBtn.addEventListener("click", () => {
+    const cur = document.documentElement.dataset.readableWidth || "full";
+    const idx = WIDTHS.indexOf(cur);
+    const next = WIDTHS[(idx + 1) % WIDTHS.length];
+    applyWidth(next);
+  });
+}
+
+(function initWidth() {
+  let saved = "full";
+  try { saved = localStorage.getItem("readableWidth") || "full"; } catch {}
+  applyWidth(WIDTHS.includes(saved) ? saved : "full");
+})();
 
 window.addEventListener("storage", (e) => {
   if (e.key === "theme") {
@@ -2907,6 +3370,9 @@ window.addEventListener("message", async (ev) => {
     resetUiState();
     await ensureDirLoaded("");
     renderTree();
+    await restoreSession();
+    renderTree();
+    startPolling();
     setStatus("Ready.");
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
